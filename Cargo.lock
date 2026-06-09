@@ -37,9 +37,10 @@ dependencies = [
 [[package]]
 name = "alkahest-rs"
 version = "0.6.0"
-source = "git+https://github.com/coophive/alkahest-rs?branch=simplify-oracle#7ae967349b6fe6cae0948e45a0b80cc50ff8407b"
+source = "git+https://github.com/holonym-foundation/alkahest-rs?branch=feat%2Fexternal-signer-scm#b129faeb104300472cc47ef37a061c112b5b0c43"
 dependencies = [
  "alloy",
+ "async-trait",
  "eyre",
  "futures",
  "futures-util",

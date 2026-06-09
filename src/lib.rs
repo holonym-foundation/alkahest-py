@@ -179,6 +179,60 @@ impl PyAlkahestClient {
         Ok(client)
     }
 
+    /// Create a client driven by an external **command signer** (e.g. `waap-cli sign-digest`), so a
+    /// WaaP/MPC account with no exportable raw key can sign escrow. Each entry in `args` may contain
+    /// the literal token `{digest}`, replaced with the 0x-hex 32-byte digest at sign time; the
+    /// command must print a 65-byte hex signature to stdout. `address` is the signer's on-chain
+    /// address. Mirrors `__new__` but threads an `AlkahestSigner::Command` through the client.
+    #[staticmethod]
+    #[pyo3(signature = (program, args, address, rpc_url, address_config=None))]
+    pub fn with_command_signer(
+        program: String,
+        args: Vec<String>,
+        address: String,
+        rpc_url: String,
+        address_config: Option<DefaultExtensionConfig>,
+    ) -> PyResult<Self> {
+        let address_config = address_config.map(|x| x.try_into()).transpose()?;
+
+        let addr = Address::from_str(&address)
+            .map_err(|e| eyre::eyre!("Failed to parse signer address: {}", e))?;
+        let signer = alkahest_rs::AlkahestSigner::Command(alkahest_rs::CommandSigner::new(
+            program, args, addr,
+        ));
+
+        let runtime = std::sync::Arc::new(Runtime::new()?);
+
+        let client: alkahest_rs::DefaultAlkahestClient = runtime.clone().block_on(async {
+            alkahest_rs::AlkahestClient::with_base_extensions_signer(
+                signer.clone(),
+                rpc_url.clone(),
+                address_config,
+            )
+            .await
+        })?;
+
+        Ok(Self {
+            inner: std::sync::Arc::new(client.clone()),
+            runtime: Some(runtime.clone()),
+            private_key: None, // external signer — no raw key
+            rpc_url: Some(rpc_url.clone()),
+            erc20: Some(Erc20Client::new(client.extensions.erc20().clone())),
+            erc721: Some(Erc721Client::new(client.extensions.erc721().clone())),
+            erc1155: Some(Erc1155Client::new(client.extensions.erc1155().clone())),
+            token_bundle: Some(TokenBundleClient::new(
+                client.extensions.token_bundle().clone(),
+            )),
+            attestation: Some(AttestationClient::new(
+                client.extensions.attestation().clone(),
+            )),
+            string_obligation: Some(StringObligationClient::new(
+                client.extensions.string_obligation().clone(),
+            )),
+            oracle: Some(OracleClient::new(client.extensions.oracle().clone())),
+        })
+    }
+
     /// List available extensions
     pub fn list_extensions(&self) -> Vec<String> {
         vec![
