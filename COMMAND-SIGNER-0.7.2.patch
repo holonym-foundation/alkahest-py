@@ -1,0 +1,1127 @@
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/py/Cargo.lock /tmp/akp040/alkahest_py-0.4.0/py/Cargo.lock
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/py/Cargo.lock	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/py/Cargo.lock	2026-06-15 12:44:33
+@@ -30,6 +30,7 @@
+ version = "0.7.2"
+ dependencies = [
+  "alloy",
++ "async-trait",
+  "eyre",
+  "futures",
+  "futures-util",
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/py/src/lib.rs /tmp/akp040/alkahest_py-0.4.0/py/src/lib.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/py/src/lib.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/py/src/lib.rs	2026-06-15 12:44:16
+@@ -223,6 +223,77 @@
+         Ok(client)
+     }
+ 
++    /// Create a client driven by an external command signer (e.g. `waap-cli` for an MPC/WaaP
++    /// account with no exportable private key) instead of a local raw key.
++    ///
++    /// * `program` / `args` — the digest-signing command; each arg may contain the `{digest}` token.
++    /// * `address` — the signer's on-chain address (hex, `0x`-prefixed).
++    /// * `typed_data_args` — optional structured EIP-712 command; each arg may contain the
++    ///   `{typed_data}` token (preferred path for policy-assessable signing).
++    #[staticmethod]
++    #[pyo3(signature = (program, args, address, rpc_url, address_config=None, typed_data_args=None))]
++    pub fn with_command_signer(
++        program: String,
++        args: Vec<String>,
++        address: String,
++        rpc_url: String,
++        address_config: Option<DefaultExtensionConfig>,
++        typed_data_args: Option<Vec<String>>,
++    ) -> PyResult<Self> {
++        let address_config = address_config.map(|x| x.try_into()).transpose()?;
++
++        // Parse the signer address and build the external-command signer.
++        let addr = Address::from_str(&address)
++            .map_err(|e| eyre::eyre!("Failed to parse address: {}", e))?;
++        let mut cs = alkahest_rs::CommandSigner::new(program, args, addr);
++        if let Some(td) = typed_data_args {
++            cs = cs.with_typed_data_command(td);
++        }
++        let signer: alkahest_rs::AlkahestSigner = cs.into();
++
++        // Create a shared runtime
++        let runtime = std::sync::Arc::new(Runtime::new()?);
++
++        // Since the constructor is async, we must block_on it
++        let client: alkahest_rs::DefaultAlkahestClient = runtime.clone().block_on(async {
++            alkahest_rs::AlkahestClient::with_base_extensions_signer(
++                signer.clone(),
++                rpc_url.clone(),
++                address_config,
++            )
++            .await
++        })?;
++
++        let client = Self {
++            inner: std::sync::Arc::new(client.clone()),
++            runtime: Some(runtime.clone()),
++            private_key: None, // No exportable key for a command signer
++            rpc_url: Some(rpc_url.clone()),
++            erc20: Some(Erc20Client::new(client.extensions.erc20().clone())),
++            erc721: Some(Erc721Client::new(client.extensions.erc721().clone())),
++            erc1155: Some(Erc1155Client::new(client.extensions.erc1155().clone())),
++            native_token: Some(NativeTokenClient::new(
++                client.extensions.native_token().clone(),
++            )),
++            token_bundle: Some(TokenBundleClient::new(
++                client.extensions.token_bundle().clone(),
++            )),
++            attestation: Some(AttestationClient::new(
++                client.extensions.attestation().clone(),
++            )),
++            string_obligation: Some(StringObligationClient::new(
++                client.extensions.string_obligation().clone(),
++            )),
++            commit_reveal: Some(CommitRevealObligationClient::new(
++                client.extensions.commit_reveal().clone(),
++            )),
++            oracle: Some(OracleClient::new(client.extensions.oracle().clone())),
++            arbiters: Some(ArbitersClient::new(client.extensions.arbiters().clone())),
++        };
++
++        Ok(client)
++    }
++
+     /// List available extensions
+     pub fn list_extensions(&self) -> Vec<String> {
+         vec![
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/Cargo.lock /tmp/akp040/alkahest_py-0.4.0/rs/Cargo.lock
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/Cargo.lock	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/Cargo.lock	2026-06-15 12:38:27
+@@ -13,6 +13,7 @@
+ version = "0.7.2"
+ dependencies = [
+  "alloy",
++ "async-trait",
+  "eyre",
+  "futures",
+  "futures-util",
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/Cargo.toml /tmp/akp040/alkahest_py-0.4.0/rs/Cargo.toml
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/Cargo.toml	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/Cargo.toml	2026-06-15 12:37:13
+@@ -19,6 +19,7 @@
+ # async
+ futures-util = "0.3"
+ tokio = { version = "1.44", features = ["full"] }
++async-trait = "0.1"
+ 
+ # misc
+ eyre = "0.6"
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/arbiters/mod.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/arbiters/mod.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/arbiters/mod.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/arbiters/mod.rs	2026-06-15 12:40:47
+@@ -19,9 +19,9 @@
+ impl_from_attestation!(contracts::arbiters::IntrinsicsArbiter2::Attestation);
+ use alloy::{
+     primitives::Address,
+-    signers::local::PrivateKeySigner,
+ };
+ use serde::{Deserialize, Serialize};
++use crate::command_signer::AlkahestSigner;
+ 
+ mod attestation_properties;
+ mod confirmation;
+@@ -75,7 +75,7 @@
+ 
+ #[derive(Clone)]
+ pub struct ArbitersModule {
+-    signer: PrivateKeySigner,
++    signer: AlkahestSigner,
+     pub(crate) public_provider: SharedPublicProvider,
+     pub(crate) wallet_provider: SharedWalletProvider,
+     /// Inherited from the parent ``AlkahestClient``. Threaded through to
+@@ -140,7 +140,7 @@
+     type Config = ArbitersAddresses;
+ 
+     async fn init(
+-        _signer: alloy::signers::local::PrivateKeySigner,
++        _signer: AlkahestSigner,
+         providers: crate::types::ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+@@ -156,7 +156,7 @@
+ 
+ impl ArbitersModule {
+     pub fn new(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         public_provider: SharedPublicProvider,
+         wallet_provider: SharedWalletProvider,
+         poll_interval: std::time::Duration,
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/arbiters/trusted_oracle.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/arbiters/trusted_oracle.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/arbiters/trusted_oracle.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/arbiters/trusted_oracle.rs	2026-06-15 12:41:40
+@@ -17,6 +17,7 @@
+ use tokio_util::sync::CancellationToken;
+ use tracing;
+ 
++use crate::command_signer::AlkahestSigner;
+ use crate::{
+     addresses::BASE_SEPOLIA_ADDRESSES,
+     contracts::{
+@@ -127,7 +128,7 @@
+     type Config = TrustedOracleAddresses;
+ 
+     async fn init(
+-        signer: alloy::signers::local::PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: crate::types::ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/attestation/mod.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/attestation/mod.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/attestation/mod.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/attestation/mod.rs	2026-06-15 12:40:47
+@@ -9,7 +9,7 @@
+ pub use util::Util;
+ 
+ use alloy::primitives::Address;
+-use alloy::signers::local::PrivateKeySigner;
++use crate::command_signer::AlkahestSigner;
+ use serde::{Deserialize, Serialize};
+ 
+ use crate::addresses::BASE_SEPOLIA_ADDRESSES;
+@@ -100,7 +100,7 @@
+ 
+ #[derive(Clone)]
+ pub struct AttestationModule {
+-    _signer: PrivateKeySigner,
++    _signer: AlkahestSigner,
+     pub(crate) wallet_provider: SharedWalletProvider,
+     pub addresses: AttestationAddresses,
+ }
+@@ -143,7 +143,7 @@
+ impl AttestationModule {
+     /// Creates a new AttestationModule instance.
+     pub fn new(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         wallet_provider: SharedWalletProvider,
+         addresses: Option<AttestationAddresses>,
+     ) -> eyre::Result<Self> {
+@@ -168,7 +168,7 @@
+ impl AlkahestExtension for AttestationModule {
+     type Config = AttestationAddresses;
+     async fn init(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: crate::types::ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/commit_reveal.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/commit_reveal.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/commit_reveal.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/commit_reveal.rs	2026-06-15 12:43:39
+@@ -11,10 +11,10 @@
+ use alloy::{
+     primitives::{Address, Bytes, FixedBytes, U256},
+     rpc::types::TransactionReceipt,
+-    signers::local::PrivateKeySigner,
+     sol_types::SolValue as _,
+ };
+ use serde::{Deserialize, Serialize};
++use crate::command_signer::AlkahestSigner;
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct CommitRevealObligationAddresses {
+@@ -24,7 +24,7 @@
+ 
+ #[derive(Clone)]
+ pub struct CommitRevealObligationModule {
+-    _signer: PrivateKeySigner,
++    _signer: AlkahestSigner,
+     wallet_provider: SharedWalletProvider,
+ 
+     pub addresses: CommitRevealObligationAddresses,
+@@ -55,7 +55,7 @@
+ 
+ impl CommitRevealObligationModule {
+     pub fn new(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         wallet_provider: SharedWalletProvider,
+         addresses: Option<CommitRevealObligationAddresses>,
+     ) -> eyre::Result<Self> {
+@@ -259,6 +259,7 @@
+ mod tests {
+     use super::*;
+     use alloy::primitives::{Bytes, FixedBytes};
++    use alloy::signers::local::PrivateKeySigner;
+     use alloy::sol_types::SolValue as _;
+ 
+     #[test]
+@@ -359,7 +360,7 @@
+     type Config = CommitRevealObligationAddresses;
+ 
+     async fn init(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/erc1155/mod.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/erc1155/mod.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/erc1155/mod.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/erc1155/mod.rs	2026-06-15 12:39:52
+@@ -12,7 +12,7 @@
+ pub mod util;
+ 
+ use alloy::primitives::Address;
+-use alloy::signers::local::PrivateKeySigner;
++use crate::command_signer::AlkahestSigner;
+ use serde::{Deserialize, Serialize};
+ 
+ use crate::addresses::BASE_SEPOLIA_ADDRESSES;
+@@ -67,7 +67,7 @@
+ /// - Collecting payments from fulfilled trades
+ #[derive(Clone)]
+ pub struct Erc1155Module {
+-    pub(crate) signer: PrivateKeySigner,
++    pub(crate) signer: AlkahestSigner,
+     pub(crate) wallet_provider: SharedWalletProvider,
+     pub addresses: Erc1155Addresses,
+ }
+@@ -88,7 +88,7 @@
+ impl Erc1155Module {
+     /// Creates a new Erc1155Module instance.
+     pub fn new(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         wallet_provider: SharedWalletProvider,
+         addresses: Option<Erc1155Addresses>,
+     ) -> eyre::Result<Self> {
+@@ -168,7 +168,7 @@
+     type Config = Erc1155Addresses;
+ 
+     async fn init(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/erc20/mod.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/erc20/mod.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/erc20/mod.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/erc20/mod.rs	2026-06-15 12:39:52
+@@ -12,7 +12,7 @@
+ pub mod util;
+ 
+ use alloy::primitives::Address;
+-use alloy::signers::local::PrivateKeySigner;
++use crate::command_signer::AlkahestSigner;
+ use serde::{Deserialize, Serialize};
+ 
+ use crate::addresses::BASE_SEPOLIA_ADDRESSES;
+@@ -67,7 +67,7 @@
+ /// - Collecting payments from fulfilled trades
+ #[derive(Clone)]
+ pub struct Erc20Module {
+-    pub(crate) signer: PrivateKeySigner,
++    pub(crate) signer: AlkahestSigner,
+     pub(crate) wallet_provider: SharedWalletProvider,
+     pub addresses: Erc20Addresses,
+ }
+@@ -88,7 +88,7 @@
+ impl Erc20Module {
+     /// Creates a new Erc20Module instance.
+     pub fn new(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         wallet_provider: SharedWalletProvider,
+         addresses: Option<Erc20Addresses>,
+     ) -> eyre::Result<Self> {
+@@ -169,7 +169,7 @@
+     type Config = Erc20Addresses;
+ 
+     async fn init(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/erc20/util.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/erc20/util.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/erc20/util.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/erc20/util.rs	2026-06-15 12:41:05
+@@ -41,6 +41,7 @@
+ 
+         // Define the Permit type using the sol! macro
+         sol! {
++            #[derive(serde::Serialize)]
+             struct Permit {
+                 address owner;
+                 address spender;
+@@ -78,8 +79,14 @@
+             deadline,
+         };
+ 
+-        // Sign the typed data according to EIP-712
+-        let signature = self.module.signer.sign_typed_data(&permit, &domain).await?;
++        // Sign the typed data according to EIP-712. Build a dynamic TypedData so the
++        // command-signer's structured typed-data path (sign_dynamic_typed_data) is reachable.
++        let typed_data = alloy::dyn_abi::TypedData::from_struct(&permit, Some(domain));
++        let signature = self
++            .module
++            .signer
++            .sign_dynamic_typed_data(&typed_data)
++            .await?;
+ 
+         Ok(signature)
+     }
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/erc721/mod.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/erc721/mod.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/erc721/mod.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/erc721/mod.rs	2026-06-15 12:39:52
+@@ -6,7 +6,7 @@
+ pub mod util;
+ 
+ use alloy::primitives::Address;
+-use alloy::signers::local::PrivateKeySigner;
++use crate::command_signer::AlkahestSigner;
+ use serde::{Deserialize, Serialize};
+ 
+ use crate::addresses::BASE_SEPOLIA_ADDRESSES;
+@@ -50,7 +50,7 @@
+ 
+ #[derive(Clone)]
+ pub struct Erc721Module {
+-    pub(crate) signer: PrivateKeySigner,
++    pub(crate) signer: AlkahestSigner,
+     pub(crate) wallet_provider: SharedWalletProvider,
+     pub addresses: Erc721Addresses,
+ }
+@@ -70,7 +70,7 @@
+ 
+ impl Erc721Module {
+     pub fn new(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         wallet_provider: SharedWalletProvider,
+         addresses: Option<Erc721Addresses>,
+     ) -> eyre::Result<Self> {
+@@ -139,7 +139,7 @@
+     type Config = Erc721Addresses;
+ 
+     async fn init(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/native_token/mod.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/native_token/mod.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/native_token/mod.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/native_token/mod.rs	2026-06-15 12:39:52
+@@ -11,7 +11,7 @@
+ pub mod util;
+ 
+ use alloy::primitives::Address;
+-use alloy::signers::local::PrivateKeySigner;
++use crate::command_signer::AlkahestSigner;
+ use serde::{Deserialize, Serialize};
+ 
+ use crate::addresses::BASE_SEPOLIA_ADDRESSES;
+@@ -66,7 +66,7 @@
+ /// - Collecting payments from fulfilled trades
+ #[derive(Clone)]
+ pub struct NativeTokenModule {
+-    pub(crate) signer: PrivateKeySigner,
++    pub(crate) signer: AlkahestSigner,
+     pub(crate) wallet_provider: SharedWalletProvider,
+     pub addresses: NativeTokenAddresses,
+ }
+@@ -87,7 +87,7 @@
+ impl NativeTokenModule {
+     /// Creates a new NativeTokenModule instance.
+     pub fn new(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         wallet_provider: SharedWalletProvider,
+         addresses: Option<NativeTokenAddresses>,
+     ) -> eyre::Result<Self> {
+@@ -138,7 +138,7 @@
+     type Config = NativeTokenAddresses;
+ 
+     async fn init(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/string.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/string.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/string.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/string.rs	2026-06-15 12:40:47
+@@ -11,10 +11,10 @@
+ use alloy::{
+     primitives::{Address, Bytes, FixedBytes, B256},
+     rpc::types::TransactionReceipt,
+-    signers::local::PrivateKeySigner,
+     sol_types::SolValue as _,
+ };
+ use serde::{Deserialize, Serialize, de::DeserializeOwned};
++use crate::command_signer::AlkahestSigner;
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct StringObligationAddresses {
+@@ -24,7 +24,7 @@
+ 
+ #[derive(Clone)]
+ pub struct StringObligationModule {
+-    _signer: PrivateKeySigner,
++    _signer: AlkahestSigner,
+     wallet_provider: SharedWalletProvider,
+ 
+     pub addresses: StringObligationAddresses,
+@@ -67,7 +67,7 @@
+     /// # Returns
+     /// * `Result<Self>` - The initialized client instance with all sub-clients configured
+     pub fn new(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         wallet_provider: SharedWalletProvider,
+         addresses: Option<StringObligationAddresses>,
+     ) -> eyre::Result<Self> {
+@@ -259,7 +259,7 @@
+     type Config = StringObligationAddresses;
+ 
+     async fn init(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/token_bundle/mod.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/token_bundle/mod.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/clients/obligations/token_bundle/mod.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/clients/obligations/token_bundle/mod.rs	2026-06-15 12:39:52
+@@ -12,7 +12,7 @@
+ pub mod util;
+ 
+ use alloy::primitives::{Address, U256};
+-use alloy::signers::local::PrivateKeySigner;
++use crate::command_signer::AlkahestSigner;
+ use serde::{Deserialize, Serialize};
+ 
+ use crate::contracts;
+@@ -164,7 +164,7 @@
+ /// - Collecting payments from fulfilled trades
+ #[derive(Clone)]
+ pub struct TokenBundleModule {
+-    pub(crate) signer: PrivateKeySigner,
++    pub(crate) signer: AlkahestSigner,
+     pub(crate) wallet_provider: SharedWalletProvider,
+     pub addresses: TokenBundleAddresses,
+ }
+@@ -185,7 +185,7 @@
+ impl TokenBundleModule {
+     /// Creates a new TokenBundleModule instance.
+     pub fn new(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         wallet_provider: SharedWalletProvider,
+         addresses: Option<TokenBundleAddresses>,
+     ) -> eyre::Result<Self> {
+@@ -255,7 +255,7 @@
+     type Config = TokenBundleAddresses;
+ 
+     async fn init(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/command_signer.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/command_signer.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/command_signer.rs	1970-01-01 01:00:00
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/command_signer.rs	2026-06-15 12:36:58
+@@ -0,0 +1,316 @@
++//! External-command signer — signs by shelling out to a CLI (e.g. `waap-cli`), so an MPC/WaaP
++//! account with no exportable private key can drive alkahest. Implements alloy's [`Signer`] and
++//! [`TxSigner`], so it threads through `AlkahestClient::new_with_signer` and every module unchanged.
++//!
++//! Two signing paths:
++//!  * **digest** (default): the command receives the 32-byte digest as a `0x`-hex string (the
++//!    `{digest}` token) and prints a 65-byte ECDSA signature — e.g. `waap-cli sign-digest`
++//!    (holonym-foundation/internal-docs#1256, requires the protector raw-digest variant).
++//!  * **typed-data** (when `with_typed_data_command` is set): EIP-712 payloads are forwarded as
++//!    JSON (the `{typed_data}` token) to a structured command — e.g. `waap-cli sign-typed-data
++//!    --data {typed_data}` — which the WaaP policy engine can risk-assess. This is the preferred
++//!    path: it uses the already-shipped `sign-typed-data` instead of un-assessable raw-digest.
++//!    EIP-712 signing routes through alloy's `sign_dynamic_typed_data`, so callers that build a
++//!    `TypedData` (see `clients::erc20` permit) hit this path.
++
++use alloy::{
++    consensus::SignableTransaction,
++    dyn_abi::TypedData,
++    network::TxSigner,
++    primitives::{Address, ChainId, Signature, B256},
++    signers::{Error as SignerError, Result as SignerResult, Signer},
++};
++use alloy::signers::local::PrivateKeySigner;
++use async_trait::async_trait;
++use std::process::Stdio;
++use tokio::process::Command;
++
++#[derive(Clone, Debug)]
++pub struct CommandSigner {
++    program: String,
++    /// Each arg may contain the literal token `{digest}`, replaced with the 0x-hex digest.
++    args: Vec<String>,
++    /// When set, EIP-712 typed data is signed via these args (each may contain the `{typed_data}`
++    /// token, replaced with the EIP-712 JSON) instead of falling back to raw-digest signing.
++    typed_data_args: Option<Vec<String>>,
++    address: Address,
++    chain_id: Option<ChainId>,
++}
++
++impl CommandSigner {
++    pub fn new(program: impl Into<String>, args: Vec<String>, address: Address) -> Self {
++        Self {
++            program: program.into(),
++            args,
++            typed_data_args: None,
++            address,
++            chain_id: None,
++        }
++    }
++
++    /// Enable structured EIP-712 signing (preferred over raw-digest). `args` may contain the
++    /// `{typed_data}` token, replaced with the EIP-712 JSON (e.g.
++    /// `vec!["sign-typed-data", "--data", "{typed_data}"]`).
++    pub fn with_typed_data_command(mut self, args: Vec<String>) -> Self {
++        self.typed_data_args = Some(args);
++        self
++    }
++
++    /// Spawn `program` with the given (already token-substituted) args; parse stdout as a 65-byte sig.
++    async fn run(&self, args: Vec<String>) -> SignerResult<Signature> {
++        let out = Command::new(&self.program)
++            .args(&args)
++            .stdout(Stdio::piped())
++            .stderr(Stdio::piped())
++            .output()
++            .await
++            .map_err(SignerError::other)?;
++        if !out.status.success() {
++            return Err(SignerError::other(format!(
++                "signer command `{}` failed: {}",
++                self.program,
++                String::from_utf8_lossy(&out.stderr)
++            )));
++        }
++        let s = String::from_utf8_lossy(&out.stdout);
++        let s = s.trim().trim_start_matches("0x");
++        let bytes = alloy::hex::decode(s).map_err(SignerError::other)?;
++        Signature::try_from(bytes.as_slice()).map_err(SignerError::other)
++    }
++
++    async fn run_sign(&self, digest: B256) -> SignerResult<Signature> {
++        let hexd = format!("0x{}", alloy::hex::encode(digest));
++        let args = self
++            .args
++            .iter()
++            .map(|a| a.replace("{digest}", &hexd))
++            .collect();
++        self.run(args).await
++    }
++
++    async fn run_sign_typed_data(&self, payload: &TypedData) -> SignerResult<Signature> {
++        let json = serde_json::to_string(payload).map_err(SignerError::other)?;
++        let args = self
++            .typed_data_args
++            .as_ref()
++            .expect("typed_data_args set")
++            .iter()
++            .map(|a| a.replace("{typed_data}", &json))
++            .collect();
++        self.run(args).await
++    }
++}
++
++#[async_trait]
++impl Signer for CommandSigner {
++    async fn sign_hash(&self, hash: &B256) -> SignerResult<Signature> {
++        self.run_sign(*hash).await
++    }
++    /// EIP-712: forward the structured payload to the typed-data command when configured; else fall
++    /// back to digest signing. alloy's generic `sign_typed_data<T>` default routes here via the
++    /// `TypedData` callers build (it can't serialize `T` itself — no `Serialize` bound).
++    async fn sign_dynamic_typed_data(&self, payload: &TypedData) -> SignerResult<Signature> {
++        match self.typed_data_args {
++            Some(_) => self.run_sign_typed_data(payload).await,
++            None => {
++                let hash = payload.eip712_signing_hash().map_err(SignerError::other)?;
++                self.run_sign(hash).await
++            }
++        }
++    }
++    fn address(&self) -> Address {
++        self.address
++    }
++    fn chain_id(&self) -> Option<ChainId> {
++        self.chain_id
++    }
++    fn set_chain_id(&mut self, chain_id: Option<ChainId>) {
++        self.chain_id = chain_id;
++    }
++}
++
++#[async_trait]
++impl TxSigner<Signature> for CommandSigner {
++    fn address(&self) -> Address {
++        self.address
++    }
++    async fn sign_transaction(
++        &self,
++        tx: &mut dyn SignableTransaction<Signature>,
++    ) -> SignerResult<Signature> {
++        let hash = tx.signature_hash();
++        self.run_sign(hash).await
++    }
++}
++
++/// The signer alkahest drives — either a local raw key (`PrivateKeySigner`) or an external command
++/// (`CommandSigner`, e.g. `waap-cli` for a WaaP/MPC account with no exportable key). It implements
++/// alloy's [`Signer`] and [`TxSigner`] by delegating to the inner variant, so it threads through
++/// `AlkahestClient` and every module exactly where `PrivateKeySigner` used to — no generics, no dyn.
++#[derive(Clone, Debug)]
++pub enum AlkahestSigner {
++    Local(PrivateKeySigner),
++    Command(CommandSigner),
++}
++
++impl AlkahestSigner {
++    /// The signer's address (inherent method so `signer.address()` stays unambiguous in modules,
++    /// matching `PrivateKeySigner`'s inherent `address()`).
++    pub fn address(&self) -> Address {
++        match self {
++            AlkahestSigner::Local(s) => s.address(),
++            AlkahestSigner::Command(s) => Signer::address(s),
++        }
++    }
++}
++
++impl From<PrivateKeySigner> for AlkahestSigner {
++    fn from(s: PrivateKeySigner) -> Self {
++        AlkahestSigner::Local(s)
++    }
++}
++
++impl From<CommandSigner> for AlkahestSigner {
++    fn from(s: CommandSigner) -> Self {
++        AlkahestSigner::Command(s)
++    }
++}
++
++#[async_trait]
++impl Signer for AlkahestSigner {
++    async fn sign_hash(&self, hash: &B256) -> SignerResult<Signature> {
++        match self {
++            AlkahestSigner::Local(s) => Signer::sign_hash(s, hash).await,
++            AlkahestSigner::Command(s) => Signer::sign_hash(s, hash).await,
++        }
++    }
++    /// Delegate EIP-712 to the inner signer so the Command variant's typed-data path is used.
++    async fn sign_dynamic_typed_data(&self, payload: &TypedData) -> SignerResult<Signature> {
++        match self {
++            AlkahestSigner::Local(s) => s.sign_dynamic_typed_data(payload).await,
++            AlkahestSigner::Command(s) => s.sign_dynamic_typed_data(payload).await,
++        }
++    }
++    fn address(&self) -> Address {
++        match self {
++            AlkahestSigner::Local(s) => Signer::address(s),
++            AlkahestSigner::Command(s) => Signer::address(s),
++        }
++    }
++    fn chain_id(&self) -> Option<ChainId> {
++        match self {
++            AlkahestSigner::Local(s) => Signer::chain_id(s),
++            AlkahestSigner::Command(s) => Signer::chain_id(s),
++        }
++    }
++    fn set_chain_id(&mut self, chain_id: Option<ChainId>) {
++        match self {
++            AlkahestSigner::Local(s) => Signer::set_chain_id(s, chain_id),
++            AlkahestSigner::Command(s) => Signer::set_chain_id(s, chain_id),
++        }
++    }
++}
++
++#[async_trait]
++impl TxSigner<Signature> for AlkahestSigner {
++    fn address(&self) -> Address {
++        match self {
++            AlkahestSigner::Local(s) => TxSigner::address(s),
++            AlkahestSigner::Command(s) => TxSigner::address(s),
++        }
++    }
++    async fn sign_transaction(
++        &self,
++        tx: &mut dyn SignableTransaction<Signature>,
++    ) -> SignerResult<Signature> {
++        match self {
++            AlkahestSigner::Local(s) => TxSigner::sign_transaction(s, tx).await,
++            AlkahestSigner::Command(s) => TxSigner::sign_transaction(s, tx).await,
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use alloy::dyn_abi::TypedData;
++    use alloy::signers::local::PrivateKeySigner;
++    use alloy::sol;
++    use alloy::sol_types::eip712_domain;
++
++    // Mock command (`echo <sig>`) → proves spawn → parse → Signature, and that it round-trips
++    // through alloy and recovers to the expected address.
++    #[tokio::test]
++    async fn command_signer_roundtrips_via_mock() {
++        let pk = PrivateKeySigner::random();
++        let digest = B256::repeat_byte(0x11);
++        let expected = pk.sign_hash(&digest).await.unwrap();
++        let sig_hex = format!("0x{}", alloy::hex::encode(expected.as_bytes()));
++
++        let signer = CommandSigner::new("echo", vec![sig_hex], pk.address());
++        let got = Signer::sign_hash(&signer, &digest).await.unwrap();
++
++        assert_eq!(got, expected);
++        assert_eq!(
++            got.recover_address_from_prehash(&digest).unwrap(),
++            pk.address()
++        );
++    }
++
++    // The AlkahestSigner enum must delegate signing to its Command variant (the WaaP path), so a
++    // client built via `new_with_signer(AlkahestSigner::Command(..))` signs escrow exactly like a
++    // local key would — recovering to the same address.
++    #[tokio::test]
++    async fn alkahest_signer_command_variant_delegates() {
++        let pk = PrivateKeySigner::random();
++        let digest = B256::repeat_byte(0x22);
++        let expected = Signer::sign_hash(&pk, &digest).await.unwrap();
++        let sig_hex = format!("0x{}", alloy::hex::encode(expected.as_bytes()));
++
++        let signer: AlkahestSigner =
++            CommandSigner::new("echo", vec![sig_hex], pk.address()).into();
++        let got = Signer::sign_hash(&signer, &digest).await.unwrap();
++
++        assert_eq!(got, expected);
++        assert_eq!(signer.address(), pk.address());
++        assert_eq!(
++            got.recover_address_from_prehash(&digest).unwrap(),
++            pk.address()
++        );
++    }
++
++    #[test]
++    fn alkahest_signer_local_variant_address() {
++        let pk = PrivateKeySigner::random();
++        let signer = AlkahestSigner::Local(pk.clone());
++        assert_eq!(signer.address(), pk.address());
++    }
++
++    // Path B: with a typed-data command configured, EIP-712 signing forwards the TypedData JSON to
++    // the command (not raw-digest). Mock echoes the locally-computed sig; assert it recovers to the
++    // signer address — proving the serialize→command→parse path produces a valid EIP-712 signature.
++    #[tokio::test]
++    async fn command_signer_typed_data_via_mock() {
++        sol! {
++            #[derive(serde::Serialize)]
++            struct Mail { string contents; }
++        }
++        let pk = PrivateKeySigner::random();
++        let domain = eip712_domain! { name: "Test", version: "1", };
++        let mail = Mail { contents: "hello".into() };
++        let td = TypedData::from_struct(&mail, Some(domain));
++
++        let expected = pk.sign_dynamic_typed_data(&td).await.unwrap();
++        let sig_hex = format!("0x{}", alloy::hex::encode(expected.as_bytes()));
++
++        // program=echo, no digest args; typed-data command just echoes the sig.
++        let signer: AlkahestSigner = CommandSigner::new("echo", vec![], pk.address())
++            .with_typed_data_command(vec![sig_hex])
++            .into();
++        let got = signer.sign_dynamic_typed_data(&td).await.unwrap();
++
++        assert_eq!(got, expected);
++        let digest = td.eip712_signing_hash().unwrap();
++        assert_eq!(got.recover_address_from_prehash(&digest).unwrap(), pk.address());
++    }
++}
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/extensions.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/extensions.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/extensions.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/extensions.rs	2026-06-15 12:39:30
+@@ -1,5 +1,5 @@
+ use alloy::primitives::Address;
+-use alloy::signers::local::PrivateKeySigner;
++use crate::command_signer::AlkahestSigner;
+ use std::any::Any;
+ 
+ // Re-export modules from clients
+@@ -37,14 +37,14 @@
+ 
+     /// Initialize the extension with its specific configuration
+     fn init(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: crate::types::ProviderContext,
+         config: Option<Self::Config>,
+     ) -> impl std::future::Future<Output = eyre::Result<Self>> + Send;
+ 
+     /// Initialize with default configuration (when Config implements Default)
+     fn init_default(
+-        signer: PrivateKeySigner,
++        signer: AlkahestSigner,
+         providers: crate::types::ProviderContext,
+     ) -> impl std::future::Future<Output = eyre::Result<Self>> + Send
+     where
+@@ -79,7 +79,7 @@
+     type Config = ();
+ 
+     async fn init(
+-        _signer: PrivateKeySigner,
++        _signer: AlkahestSigner,
+         _providers: crate::types::ProviderContext,
+         _config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+@@ -108,7 +108,7 @@
+     type Config = ();
+ 
+     async fn init(
+-        _private_key: PrivateKeySigner,
++        _private_key: AlkahestSigner,
+         _providers: crate::types::ProviderContext,
+         _config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+@@ -149,7 +149,7 @@
+     type Config = DefaultExtensionConfig;
+ 
+     async fn init(
+-        private_key: PrivateKeySigner,
++        private_key: AlkahestSigner,
+         providers: crate::types::ProviderContext,
+         config: Option<DefaultExtensionConfig>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/lib.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/lib.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/lib.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/lib.rs	2026-06-15 12:38:01
+@@ -26,6 +26,7 @@
+ 
+ pub mod addresses;
+ pub mod clients;
++mod command_signer;
+ pub mod contracts;
+ pub mod extensions;
+ pub mod fixtures;
+@@ -33,6 +34,8 @@
+ pub mod types;
+ pub mod utils;
+ 
++pub use command_signer::{AlkahestSigner, CommandSigner};
++
+ // Re-export contract types from client modules
+ pub use clients::arbiters::ArbitersContract;
+ pub use clients::attestation::AttestationContract;
+@@ -115,7 +118,7 @@
+     /// Poll interval used for HTTP transports when emulating event subscriptions.
+     /// Ignored when the underlying transport supports pubsub (ws/wss/ipc).
+     pub poll_interval: Duration,
+-    private_key: PrivateKeySigner,
++    signer: AlkahestSigner,
+     rpc_url: String,
+ }
+ 
+@@ -140,17 +143,18 @@
+         rpc_url: impl ToString + Clone + Send,
+         poll_interval: Option<Duration>,
+     ) -> eyre::Result<Self> {
++        let signer: AlkahestSigner = private_key.into();
+         let wallet_provider =
+-            Arc::new(utils::get_wallet_provider(private_key.clone(), rpc_url.clone()).await?);
++            Arc::new(utils::get_wallet_provider(signer.clone(), rpc_url.clone()).await?);
+         let public_provider = Arc::new(utils::get_public_provider(rpc_url.clone()).await?);
+ 
+         Ok(AlkahestClient {
+             wallet_provider,
+             public_provider,
+-            address: private_key.address(),
++            address: signer.address(),
+             extensions: extensions::NoExtension,
+             poll_interval: poll_interval.unwrap_or(utils::DEFAULT_POLL_INTERVAL),
+-            private_key,
++            signer,
+             rpc_url: rpc_url.to_string(),
+         })
+     }
+@@ -180,29 +184,62 @@
+         config: Option<DefaultExtensionConfig>,
+         poll_interval: Option<Duration>,
+     ) -> eyre::Result<Self> {
++        let signer: AlkahestSigner = private_key.into();
+         let wallet_provider =
+-            Arc::new(utils::get_wallet_provider(private_key.clone(), rpc_url.clone()).await?);
++            Arc::new(utils::get_wallet_provider(signer.clone(), rpc_url.clone()).await?);
+         let public_provider = Arc::new(utils::get_public_provider(rpc_url.clone()).await?);
+ 
+         let resolved_poll_interval = poll_interval.unwrap_or(utils::DEFAULT_POLL_INTERVAL);
+         let providers = crate::types::ProviderContext {
+             wallet: wallet_provider.clone(),
+             public: public_provider.clone(),
+-            signer: private_key.clone(),
++            signer: signer.clone(),
+             poll_interval: resolved_poll_interval,
+         };
+-        let extensions = BaseExtensions::init(private_key.clone(), providers, config).await?;
++        let extensions = BaseExtensions::init(signer.clone(), providers, config).await?;
+ 
+         Ok(AlkahestClient {
+             wallet_provider,
+             public_provider,
+-            address: private_key.address(),
++            address: signer.address(),
+             extensions,
+             poll_interval: resolved_poll_interval,
+-            private_key,
++            signer,
+             rpc_url: rpc_url.to_string(),
+         })
+     }
++
++    /// Create a client with all base extensions, driven by any [`AlkahestSigner`]
++    /// (a local raw key, or an external command such as `waap-cli` for an MPC/WaaP account).
++    /// This is the constructor the py binding's command-signer path calls.
++    pub async fn with_base_extensions_signer(
++        signer: AlkahestSigner,
++        rpc_url: impl ToString + Clone + Send,
++        config: Option<DefaultExtensionConfig>,
++    ) -> eyre::Result<Self> {
++        let wallet_provider =
++            Arc::new(utils::get_wallet_provider(signer.clone(), rpc_url.clone()).await?);
++        let public_provider = Arc::new(utils::get_public_provider(rpc_url.clone()).await?);
++
++        let resolved_poll_interval = utils::DEFAULT_POLL_INTERVAL;
++        let providers = crate::types::ProviderContext {
++            wallet: wallet_provider.clone(),
++            public: public_provider.clone(),
++            signer: signer.clone(),
++            poll_interval: resolved_poll_interval,
++        };
++        let extensions = BaseExtensions::init(signer.clone(), providers, config).await?;
++
++        Ok(AlkahestClient {
++            wallet_provider,
++            public_provider,
++            address: signer.address(),
++            extensions,
++            poll_interval: resolved_poll_interval,
++            signer,
++            rpc_url: rpc_url.to_string(),
++        })
++    }
+ }
+ 
+ impl<Extensions: AlkahestExtension> AlkahestClient<Extensions> {
+@@ -214,10 +251,10 @@
+         let providers = crate::types::ProviderContext {
+             wallet: self.wallet_provider.clone(),
+             public: self.public_provider.clone(),
+-            signer: self.private_key.clone(),
++            signer: self.signer.clone(),
+             poll_interval: self.poll_interval,
+         };
+-        let new_extension = NewExt::init(self.private_key.clone(), providers, config).await?;
++        let new_extension = NewExt::init(self.signer.clone(), providers, config).await?;
+ 
+         let joined_extensions = extensions::JoinExtension {
+             left: self.extensions,
+@@ -230,7 +267,7 @@
+             address: self.address,
+             extensions: joined_extensions,
+             poll_interval: self.poll_interval,
+-            private_key: self.private_key,
++            signer: self.signer,
+             rpc_url: self.rpc_url,
+         })
+     }
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/types.rs /tmp/akp040/alkahest_py-0.4.0/rs/src/types.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/src/types.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/src/types.rs	2026-06-15 12:38:14
+@@ -11,7 +11,7 @@
+     sol,
+ };
+ 
+-use alloy::signers::local::PrivateKeySigner;
++use crate::command_signer::AlkahestSigner;
+ use std::sync::Arc;
+ 
+ use crate::contracts::IEAS::Attestation;
+@@ -92,7 +92,7 @@
+ pub struct ProviderContext {
+     pub wallet: SharedWalletProvider,
+     pub public: SharedPublicProvider,
+-    pub signer: PrivateKeySigner,
++    pub signer: AlkahestSigner,
+     /// Polling interval used by event-watching helpers when the transport
+     /// is HTTP. Inherited from the parent ``AlkahestClient`` and threaded
+     /// through to every extension module so per-test or per-deployment
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/tests/client_extensions.rs /tmp/akp040/alkahest_py-0.4.0/rs/tests/client_extensions.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/tests/client_extensions.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/tests/client_extensions.rs	2026-06-15 12:42:38
+@@ -4,7 +4,8 @@
+     extensions::{AlkahestExtension, HasErc20},
+     utils::setup_test_environment,
+ };
+-use alloy::{primitives::address, signers::local::PrivateKeySigner};
++use alloy::primitives::address;
++use alkahest_rs::AlkahestSigner;
+ use eyre::Result;
+ use serial_test::serial;
+ 
+@@ -61,7 +62,7 @@
+     type Config = CustomTrackerConfig;
+ 
+     async fn init(
+-        _private_key: PrivateKeySigner,
++        _private_key: AlkahestSigner,
+         _providers: alkahest_rs::types::ProviderContext,
+         config: Option<Self::Config>,
+     ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/tests/modular_extensions.rs /tmp/akp040/alkahest_py-0.4.0/rs/tests/modular_extensions.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/tests/modular_extensions.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/tests/modular_extensions.rs	2026-06-15 12:42:38
+@@ -21,7 +21,7 @@
+     },
+     utils::setup_test_environment,
+ };
+-use alloy::signers::local::PrivateKeySigner;
++use alkahest_rs::AlkahestSigner;
+ use eyre::Result;
+ 
+ #[tokio::test]
+@@ -222,7 +222,7 @@
+         type Config = MyCustomConfig;
+ 
+         async fn init(
+-            private_key: PrivateKeySigner,
++            private_key: AlkahestSigner,
+             providers: alkahest_rs::types::ProviderContext,
+             config: Option<Self::Config>,
+         ) -> eyre::Result<Self> {
+diff --color -ruN --exclude target --exclude *.tar.gz --exclude .git /tmp/akp040-pristine/alkahest_py-0.4.0/rs/tests/nonce_synchronization.rs /tmp/akp040/alkahest_py-0.4.0/rs/tests/nonce_synchronization.rs
+--- /tmp/akp040-pristine/alkahest_py-0.4.0/rs/tests/nonce_synchronization.rs	2006-07-24 03:21:28
++++ /tmp/akp040/alkahest_py-0.4.0/rs/tests/nonce_synchronization.rs	2026-06-15 12:42:52
+@@ -125,13 +125,13 @@
+         let shared_wallet_provider = std::sync::Arc::new(provider);
+ 
+         let new_erc20_module = Erc20Module::new(
+-            test.alice.clone(),
++            test.alice.clone().into(),
+             shared_wallet_provider.clone(),
+             Some(test.addresses.erc20_addresses.clone()),
+         )?;
+ 
+         let new_string_obligation_module = StringObligationModule::new(
+-            test.alice.clone(),
++            test.alice.clone().into(),
+             shared_wallet_provider.clone(),
+             Some(test.addresses.string_obligation_addresses.clone()),
+         )?;
