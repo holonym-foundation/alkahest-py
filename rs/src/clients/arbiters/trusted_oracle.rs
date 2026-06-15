@@ -356,6 +356,23 @@ impl TrustedOracleModule {
         Ok(receipt)
     }
 
+    /// Build the `requestArbitration` calldata (target + encoded input) WITHOUT signing
+    /// or broadcasting — for external submission by a WaaP/MPC wallet via `waap-cli
+    /// send-tx`. Mirrors `request_arbitration`'s encoding exactly.
+    pub fn request_arbitration_calldata(
+        &self,
+        obligation_uid: FixedBytes<32>,
+        oracle: Address,
+        demand: Bytes,
+    ) -> (Address, Bytes) {
+        let trusted_oracle_arbiter = TrustedOracleArbiter::new(
+            self.addresses.trusted_oracle_arbiter,
+            &*self.wallet_provider,
+        );
+        let call = trusted_oracle_arbiter.requestArbitration(obligation_uid, oracle, demand);
+        (self.addresses.trusted_oracle_arbiter, call.calldata().clone())
+    }
+
     /// Arbitrate as a trusted oracle with the new 3-argument API
     ///
     /// # Arguments

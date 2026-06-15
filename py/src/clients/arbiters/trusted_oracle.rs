@@ -62,6 +62,27 @@ impl OracleClient {
         })
     }
 
+    /// Build the `requestArbitration` calldata WITHOUT signing/broadcasting — returns
+    /// `(to_address, "0x"-hex calldata)` for external submission by a WaaP/MPC wallet
+    /// via `waap-cli send-tx`. Synchronous (no chain I/O).
+    pub fn request_arbitration_calldata(
+        &self,
+        obligation_uid: String,
+        oracle: String,
+        demand: Vec<u8>,
+    ) -> PyResult<(String, String)> {
+        let uid: FixedBytes<32> = obligation_uid.parse().map_err(map_parse_to_pyerr)?;
+        let oracle_addr = oracle.parse().map_err(map_parse_to_pyerr)?;
+        let demand_bytes = alloy::primitives::Bytes::from(demand);
+        let (to, data) = self
+            .inner
+            .request_arbitration_calldata(uid, oracle_addr, demand_bytes);
+        Ok((
+            format!("0x{}", alloy::hex::encode(to.as_slice())),
+            format!("0x{}", alloy::hex::encode(data.as_ref())),
+        ))
+    }
+
     pub fn extract_obligation_data(&self, attestation: &PyOracleAttestation) -> PyResult<String> {
         use alloy::hex;
         use alloy::sol_types::SolType;

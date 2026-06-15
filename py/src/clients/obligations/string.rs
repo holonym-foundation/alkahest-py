@@ -82,6 +82,33 @@ impl StringObligationClient {
         })
     }
 
+    /// Build the `doObligation` calldata WITHOUT signing/broadcasting — returns
+    /// `(to_address, "0x"-hex calldata)` for external submission by a WaaP/MPC
+    /// wallet via `waap-cli send-tx`. Synchronous (no chain I/O).
+    #[pyo3(signature = (item, ref_uid=None, schema=None))]
+    pub fn do_obligation_calldata(
+        &self,
+        item: String,
+        ref_uid: Option<String>,
+        schema: Option<String>,
+    ) -> PyResult<(String, String)> {
+        let ref_uid = if let Some(s) = ref_uid {
+            Some(s.parse().map_err(map_parse_to_pyerr)?)
+        } else {
+            None
+        };
+        let schema = if let Some(s) = schema {
+            Some(s.parse().map_err(map_parse_to_pyerr)?)
+        } else {
+            None
+        };
+        let (to, data) = self.inner.do_obligation_calldata(item, schema, ref_uid);
+        Ok((
+            format!("0x{}", alloy::hex::encode(to.as_slice())),
+            format!("0x{}", alloy::hex::encode(data.as_ref())),
+        ))
+    }
+
     #[pyo3(signature = (json_data, ref_uid=None, schema=None))]
     pub fn do_obligation_json<'py>(
         &self,

@@ -147,6 +147,31 @@ impl StringObligationModule {
         Ok(receipt)
     }
 
+    /// Build the `doObligation` calldata (target + encoded input) WITHOUT signing or
+    /// broadcasting. Lets an external submitter (e.g. a WaaP/MPC wallet via
+    /// `waap-cli send-tx`) broadcast the fulfillment when the on-chain account has no
+    /// exportable key. Mirrors `do_obligation`'s argument encoding exactly.
+    pub fn do_obligation_calldata(
+        &self,
+        item: String,
+        schema: Option<B256>,
+        ref_uid: Option<FixedBytes<32>>,
+    ) -> (Address, Bytes) {
+        let contract =
+            contracts::obligations::StringObligation::new(self.addresses.obligation, &*self.wallet_provider);
+
+        let obligation_data = contracts::obligations::StringObligation::ObligationData {
+            item,
+            schema: schema.unwrap_or_default(),
+        };
+
+        let call = contract.doObligation(
+            obligation_data,
+            ref_uid.unwrap_or(FixedBytes::<32>::default()),
+        );
+        (self.addresses.obligation, call.calldata().clone())
+    }
+
     pub async fn do_obligation_json<T: serde::Serialize>(
         &self,
         obligation_data: T,
