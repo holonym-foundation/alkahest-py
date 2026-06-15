@@ -179,27 +179,35 @@ impl PyAlkahestClient {
         Ok(client)
     }
 
-    /// Create a client driven by an external **command signer** (e.g. `waap-cli sign-digest`), so a
-    /// WaaP/MPC account with no exportable raw key can sign escrow. Each entry in `args` may contain
-    /// the literal token `{digest}`, replaced with the 0x-hex 32-byte digest at sign time; the
-    /// command must print a 65-byte hex signature to stdout. `address` is the signer's on-chain
-    /// address. Mirrors `__new__` but threads an `AlkahestSigner::Command` through the client.
+    /// Create a client driven by an external **command signer** (e.g. `waap-cli`), so a WaaP/MPC
+    /// account with no exportable raw key can sign escrow. Each entry in `args` may contain the
+    /// literal token `{digest}`, replaced with the 0x-hex 32-byte digest at sign time; the command
+    /// must print a 65-byte hex signature to stdout. `address` is the signer's on-chain address.
+    ///
+    /// `typed_data_args` (optional) enables the **preferred** EIP-712 path: when set, typed-data
+    /// signing forwards the EIP-712 JSON (the `{typed_data}` token) to a structured command (e.g.
+    /// `waap-cli sign-typed-data --data {typed_data}`), which the WaaP policy engine can risk-assess
+    /// — avoiding the un-assessable raw `sign-digest`. Mirrors `__new__` but threads an
+    /// `AlkahestSigner::Command` through the client.
     #[staticmethod]
-    #[pyo3(signature = (program, args, address, rpc_url, address_config=None))]
+    #[pyo3(signature = (program, args, address, rpc_url, address_config=None, typed_data_args=None))]
     pub fn with_command_signer(
         program: String,
         args: Vec<String>,
         address: String,
         rpc_url: String,
         address_config: Option<DefaultExtensionConfig>,
+        typed_data_args: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let address_config = address_config.map(|x| x.try_into()).transpose()?;
 
         let addr = Address::from_str(&address)
             .map_err(|e| eyre::eyre!("Failed to parse signer address: {}", e))?;
-        let signer = alkahest_rs::AlkahestSigner::Command(alkahest_rs::CommandSigner::new(
-            program, args, addr,
-        ));
+        let mut command_signer = alkahest_rs::CommandSigner::new(program, args, addr);
+        if let Some(td_args) = typed_data_args {
+            command_signer = command_signer.with_typed_data_command(td_args);
+        }
+        let signer = alkahest_rs::AlkahestSigner::Command(command_signer);
 
         let runtime = std::sync::Arc::new(Runtime::new()?);
 

@@ -37,7 +37,7 @@ dependencies = [
 [[package]]
 name = "alkahest-rs"
 version = "0.6.0"
-source = "git+https://github.com/holonym-foundation/alkahest-rs?branch=feat%2Fexternal-signer-scm#b129faeb104300472cc47ef37a061c112b5b0c43"
+source = "git+https://github.com/holonym-foundation/alkahest-rs?branch=feat%2Fexternal-signer-scm#e48d534bda3f81fa4e0d8c6e132d4c18e1cfb33e"
 dependencies = [
  "alloy",
  "async-trait",
